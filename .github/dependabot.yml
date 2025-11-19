@@ -1,0 +1,21 @@
+# To get started with Dependabot version updates, you'll need to specify which
+# package ecosystems to update and where the package manifests are located.
+# Please see the documentation for all configuration options:
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # 設定 NPM (Node.js) 的依賴檢查
+  - package-ecosystem: "npm"
+    # package.json 所在的目錄 (根目錄)
+    directory: "/"
+    # 檢查頻率：每天
+    schedule:
+      interval: "daily"
+    # 為了不讓你的 PR 列表爆炸，限制最多同時開 10 個 PR
+    open-pull-requests-limit: 10
+    # 自動幫 PR 加上標籤 (看起來比較專業)
+    labels:
+      - "dependencies"
+      - "security"
+      - "automated-pr"
