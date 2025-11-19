@@ -1,0 +1,17 @@
+name: Security Audit (SCA)
+
+on: [push, pull_request]
+
+jobs:
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run SCA Audit
+        # 這行指令會檢查 package.json 裡的套件有沒有安全性漏洞
+        run: npm audit --audit-level=high
