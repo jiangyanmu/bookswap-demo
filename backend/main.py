@@ -4,18 +4,56 @@ import uuid
 import datetime
 import os
 import threading
+from collections import deque
 from contextvars import ContextVar
 
 import psutil
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.templating import Jinja2Templates
 from prometheus_client import Histogram, Counter, Gauge, make_asgi_app
 from pythonjsonlogger import jsonlogger
+
+# -------------------------------
+# 1. 設定 Templates (Dashboard 前端)
+# -------------------------------
+# 請確保您的目錄下有 "templates" 資料夾，且裡面有 index.html
+templates = Jinja2Templates(directory="templates")
 
 # -------------------------------
 # Context for trace_id
 # -------------------------------
 trace_id_var = ContextVar("trace_id", default=None)
 
+# -------------------------------
+# Dashboard Global State (新增：用於儲存給前端顯示的數據)
+# -------------------------------
+DASHBOARD_STATE = {
+    "total_requests": 0,
+    "total_errors": 0,
+    "latest_latency_ms": 0,
+    "logs": deque(maxlen=20)  # 只保留最新 20 筆日誌
+}
+
+# -------------------------------
+# Custom Log Handler for Dashboard (新增：攔截日誌給前端)
+# -------------------------------
+class DashboardLogHandler(logging.Handler):
+    """將日誌同時寫入記憶體，讓 Dashboard 可以即時讀取"""
+    def emit(self, record):
+        try:
+            log_entry = self.format(record)
+            log_obj = json.loads(log_entry)
+
+            # 簡化格式
+            simple_log = {
+                "type": log_obj.get("level", "INFO"),
+                "time": log_obj.get("timestamp", "").split("T")[-1].split(".")[0],
+                "msg": log_obj.get("message", "")
+            }
+            DASHBOARD_STATE["logs"].appendleft(simple_log)
+        except Exception:
+            self.handleError(record)
 
 # -------------------------------
 # Custom JSON Formatter
@@ -24,7 +62,6 @@ class CustomJsonFormatter(jsonlogger.JsonFormatter):
     def add_fields(self, log_record, record, message_dict):
         super().add_fields(log_record, record, message_dict)
         if not log_record.get("timestamp"):
-            # 使用 datetime 支援毫秒
             log_record["timestamp"] = datetime.datetime.utcfromtimestamp(
                 record.created
             ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -39,14 +76,22 @@ class CustomJsonFormatter(jsonlogger.JsonFormatter):
 
 
 # -------------------------------
-# Configure Logger
+# Configure Logger (修改：加入 DashboardHandler)
 # -------------------------------
 logger = logging.getLogger("bookswap-app")
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
-log_handler = logging.StreamHandler()
+
+# 原本的 Console Handler
+console_handler = logging.StreamHandler()
 formatter = CustomJsonFormatter("%(timestamp)s %(level)s %(name)s %(message)s")
-log_handler.setFormatter(formatter)
-logger.addHandler(log_handler)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+# 新增的 Dashboard Handler
+dashboard_handler = DashboardLogHandler()
+dashboard_handler.setFormatter(formatter)
+logger.addHandler(dashboard_handler)
+
 logger.propagate = False
 
 # -------------------------------
@@ -65,9 +110,8 @@ CPU_USAGE = Gauge(
 
 def update_cpu_usage():
     while True:
+        # 這裡的 interval=1 本身就會阻塞 1 秒，所以不需要額外的 sleep
         CPU_USAGE.set(psutil.cpu_percent(interval=1))
-        threading.Event().wait(5)  # sleep 5s
-
 
 cpu_thread = threading.Thread(target=update_cpu_usage, daemon=True)
 cpu_thread.start()
@@ -89,7 +133,7 @@ logger.info(
 
 
 # -------------------------------
-# Middleware for trace_id
+# Middleware for trace_id & Dashboard Stats (修改：加入數據統計)
 # -------------------------------
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next):
@@ -97,9 +141,18 @@ async def request_context_middleware(request: Request, call_next):
     trace_id = str(uuid.uuid4())
     trace_id_var.set(trace_id)
 
+    # Dashboard: 統計請求數
+    DASHBOARD_STATE["total_requests"] += 1
+
     response = await call_next(request)
 
     process_time = datetime.datetime.utcnow().timestamp() - start_time
+
+    # Dashboard: 統計延遲與錯誤
+    DASHBOARD_STATE["latest_latency_ms"] = round(process_time * 1000, 2)
+    if response.status_code >= 500:
+        DASHBOARD_STATE["total_errors"] += 1
+
     log_extra = {
         "props": {
             "method": request.method,
@@ -125,10 +178,48 @@ app.mount("/metrics", metrics_app)
 # -------------------------------
 # API Endpoints
 # -------------------------------
-@app.get("/", tags=["Health Check"])
-def read_root():
-    return {"status": "ok", "service": "bookswap-backend"}
 
+# 修改：根路徑回傳 Dashboard HTML
+@app.get("/", tags=["Dashboard"], response_class=HTMLResponse)
+async def read_root(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+# 新增：Dashboard 數據 API
+@app.get("/api/dashboard-stats", tags=["Dashboard"])
+async def dashboard_stats():
+    """提供給前端 polling 的 JSON 數據"""
+    total = DASHBOARD_STATE["total_requests"]
+    errors = DASHBOARD_STATE["total_errors"]
+
+    # 計算可用性
+    availability = 100.0
+    if total > 0:
+        availability = ((total - errors) / total) * 100
+
+    cpu = CPU_USAGE._value.get()
+    latency = DASHBOARD_STATE["latest_latency_ms"]
+
+    # 簡易 Alert 邏輯
+    alerts = []
+    if cpu > 85:
+        alerts.append({"level": "WARNING", "title": f"CPU High ({cpu}%)", "component": "Hosting Node"})
+    if latency > 500:
+        alerts.append({"level": "CRITICAL", "title": "High Latency", "component": "API Gateway"})
+    if errors > 0 and (errors / total) > 0.05:
+         alerts.append({"level": "CRITICAL", "title": "Error Rate > 5%", "component": "Auth/Bid Service"})
+
+    return JSONResponse({
+        "metrics": {
+            "availability": round(availability, 2),
+            "errorBudgetUsed": min(errors * 10, 100), # 模擬預算消耗
+            "p95Latency": int(latency),
+            "p95Threshold": 200,
+            "cpuUsage": cpu,
+            "cpuThreshold": 90,
+        },
+        "logs": list(DASHBOARD_STATE["logs"]),
+        "alerts": alerts
+    })
 
 @app.post("/login", tags=["Authentication"])
 def login(password: str):
@@ -179,3 +270,7 @@ def place_bid(book_id: int, amount: float):
         )
 
     return {"message": f"Bid for book {book_id} of ${amount} placed successfully."}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
