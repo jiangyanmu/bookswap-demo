@@ -8,9 +8,10 @@ from collections import deque
 from contextvars import ContextVar
 
 import psutil
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware  # Import CORS Middleware
 from prometheus_client import Histogram, Counter, Gauge, make_asgi_app
 from pythonjsonlogger import jsonlogger
 
@@ -133,6 +134,61 @@ LATENCY_THRESHOLD_MS = 500
 # -------------------------------
 app = FastAPI(title="BookSwap Backend")
 
+# --- START: ADDED FOR FRONTEND ---
+# Add CORS middleware to allow cross-origin requests from the React frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3001"],  # Allows the React app to make requests
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
+# Sample book data
+BOOKS_DATA = [
+    {
+        "id": 1,
+        "title": "Designing Data-Intensive Applications",
+        "author": "Martin Kleppmann",
+        "price": 47.99,
+        "description": "The big ideas behind reliable, scalable, and maintainable systems.",
+        "cover_image": "https://images-na.ssl-images-amazon.com/images/I/91J9p5S2s0L.jpg",
+    },
+    {
+        "id": 2,
+        "title": "Clean Code: A Handbook of Agile Software Craftsmanship",
+        "author": "Robert C. Martin",
+        "price": 35.50,
+        "description": "Even bad code can function. But if code isn't clean, it can bring a development organization to its knees.",
+        "cover_image": "https://images-na.ssl-images-amazon.com/images/I/41xShlnlJiL._SX379_BO1,204,203,200_.jpg",
+    },
+    {
+        "id": 3,
+        "title": "Introduction to Algorithms",
+        "author": "Thomas H. Cormen",
+        "price": 95.25,
+        "description": "The 'bible' of algorithms, a comprehensive textbook covering the full spectrum of modern algorithms.",
+        "cover_image": "https://images-na.ssl-images-amazon.com/images/I/81maAFxDEtL.jpg",
+    },
+    {
+        "id": 4,
+        "title": "The Pragmatic Programmer: Your Journey to Mastery",
+        "author": "David Thomas, Andrew Hunt",
+        "price": 42.00,
+        "description": "Examines the core of what it means to be a modern programmer, exploring topics ranging from personal responsibility and career development to architectural techniques.",
+        "cover_image": "https://images-na.ssl-images-amazon.com/images/I/71f743sOPoL.jpg",
+    },
+    {
+        "id": 5,
+        "title": "Refactoring: Improving the Design of Existing Code",
+        "author": "Martin Fowler",
+        "price": 53.00,
+        "description": "The classic guide to refactoring, updated with new examples and techniques.",
+        "cover_image": "https://images-na.ssl-images-amazon.com/images/I/41odjX7oQpL._SX379_BO1,204,203,200_.jpg",
+    },
+]
+# --- END: ADDED FOR FRONTEND ---
+
 logger.info(
     "Starting BookSwap backend",
     extra={"props": {"one_click_bid_enabled": ONE_CLICK_BID_ENABLED}},
@@ -197,6 +253,21 @@ app.mount("/metrics", metrics_app)
 # -------------------------------
 # API Endpoints
 # -------------------------------
+
+# --- START: ADDED FOR FRONTEND ---
+@app.get("/api/books", tags=["Books"])
+async def get_all_books():
+    """Returns a list of all available books."""
+    return BOOKS_DATA
+
+@app.get("/api/books/{book_id}", tags=["Books"])
+async def get_book_by_id(book_id: int):
+    """Returns a single book by its ID."""
+    book = next((book for book in BOOKS_DATA if book["id"] == book_id), None)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    return book
+# --- END: ADDED FOR FRONTEND ---
 
 
 # 修改：根路徑回傳 Dashboard HTML

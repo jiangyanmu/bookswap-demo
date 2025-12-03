@@ -54,7 +54,7 @@ api.interceptors.response.use(response => {
   const endTime = new Date();
   const startTime = error.config?.metadata?.startTime || endTime; // Fallback if no startTime
   const latencyMs = endTime.getTime() - startTime.getTime();
-  
+
   const errorDetails = {
     method: error.config?.method?.toUpperCase(),
     url: error.config?.url,
@@ -82,7 +82,7 @@ const apiService = {
   placeBid: (bookId, amount) => {
     return api.post('/bid', { book_id: bookId, amount: amount });
   },
-  
+
   getMetrics: () => {
     // The metrics endpoint returns plain text, so we override the default JSON parsing
     return api.get('/metrics', {
