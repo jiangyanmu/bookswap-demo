@@ -9,16 +9,17 @@ from contextvars import ContextVar
 from typing import List
 
 import psutil
-from fastapi import FastAPI, Request, Response, HTTPException, Depends
+from fastapi import FastAPI, Request, Response, HTTPException, Depends, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Histogram, Counter, Gauge, make_asgi_app
 from pythonjsonlogger import jsonlogger
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
-# Import new database modules
-import models, schemas, crud
+# Import database modules
+import models, schemas, crud, security
 from database import SessionLocal, engine, get_db
 
 
@@ -134,22 +135,80 @@ app = FastAPI(title="BookSwap Backend")
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3001"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
+# --- Simple Token Model ---
+class SimpleToken(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+# --- Auth Dependencies ---
+async def get_current_user_simple(request: Request, db: Session = Depends(get_db)):
+    auth_token = request.headers.get("X-Auth-Token")
+    if not auth_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        )
+    try:
+        username, role = auth_token.split(":", 1)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token format"
+        )
+
+    user = crud.get_user_by_username(db, username=username)
+    if not user or user.role != role:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
+        )
+    return user
+
+
+async def get_current_seller_simple(
+    current_user: models.User = Depends(get_current_user_simple),
+):
+    if current_user.role != "seller":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Seller role required"
+        )
+    return current_user
+
+
 # --- Database Seeding on Startup ---
-def seed_database():
+@app.on_event("startup")
+async def startup_event():
     db = SessionLocal()
-    # Check if the database is already seeded
-    if db.query(models.Book).count() == 0:
-        logger.info("Database is empty. Seeding initial book data...")
+    if db.query(models.User).count() == 0:
+        logger.info("Database is empty. Seeding initial users and books...")
+        # Create default users
+        seller = crud.create_user(
+            db,
+            schemas.UserCreate(
+                username="seller",
+                email="seller@example.com",
+                password="password",
+                role="seller",
+            ),
+        )
+        buyer = crud.create_user(
+            db,
+            schemas.UserCreate(
+                username="buyer",
+                email="buyer@example.com",
+                password="password",
+                role="buyer",
+            ),
+        )
+
+        # Create default books
         seed_books = [
             {
-                "id": 1,
                 "title": "Designing Data-Intensive Applications",
                 "author": "Martin Kleppmann",
                 "price": 47.99,
@@ -157,52 +216,20 @@ def seed_database():
                 "cover_image": "https://images-na.ssl-images-amazon.com/images/I/91J9p5S2s0L.jpg",
             },
             {
-                "id": 2,
-                "title": "Clean Code: A Handbook of Agile Software Craftsmanship",
+                "title": "Clean Code",
                 "author": "Robert C. Martin",
                 "price": 35.50,
-                "description": "Even bad code can function. But if code isn't clean, it can bring a development organization to its knees.",
+                "description": "Even bad code can function.",
                 "cover_image": "https://images-na.ssl-images-amazon.com/images/I/41xShlnlJiL._SX379_BO1,204,203,200_.jpg",
-            },
-            {
-                "id": 3,
-                "title": "Introduction to Algorithms",
-                "author": "Thomas H. Cormen",
-                "price": 95.25,
-                "description": "The 'bible' of algorithms, a comprehensive textbook covering the full spectrum of modern algorithms.",
-                "cover_image": "https://images-na.ssl-images-amazon.com/images/I/81maAFxDEtL.jpg",
-            },
-            {
-                "id": 4,
-                "title": "The Pragmatic Programmer: Your Journey to Mastery",
-                "author": "David Thomas, Andrew Hunt",
-                "price": 42.00,
-                "description": "Examines the core of what it means to be a modern programmer, exploring topics ranging from personal responsibility and career development to architectural techniques.",
-                "cover_image": "https://images-na.ssl-images-amazon.com/images/I/71f743sOPoL.jpg",
-            },
-            {
-                "id": 5,
-                "title": "Refactoring: Improving the Design of Existing Code",
-                "author": "Martin Fowler",
-                "price": 53.00,
-                "description": "The classic guide to refactoring, updated with new examples and techniques.",
-                "cover_image": "https://images-na.ssl-images-amazon.com/images/I/41odjX7oQpL._SX379_BO1,204,203,200_.jpg",
             },
         ]
         for book_data in seed_books:
-            # Pydantic schema validation is not strictly needed here as we trust the seed data,
-            # but it's good practice for consistency.
-            book_schema = schemas.Book(**book_data)
-            crud.create_book(db, book=book_schema)
+            crud.create_book(db, schemas.BookCreate(**book_data), owner_id=seller.id)
         logger.info("Database seeded successfully.")
     else:
-        logger.info("Database already contains data. Skipping seeding.")
+        logger.info("Database already contains data.")
     db.close()
 
-
-@app.on_event("startup")
-async def startup_event():
-    seed_database()
     logger.info(
         "Starting BookSwap backend",
         extra={"props": {"one_click_bid_enabled": ONE_CLICK_BID_ENABLED}},
@@ -274,20 +301,58 @@ app.mount("/metrics", metrics_app)
 # -------------------------------
 
 
-@app.get("/api/books", response_model=List[schemas.Book], tags=["Books"])
-async def get_all_books(db: Session = Depends(get_db)):
-    """Returns a list of all available books from the database."""
-    books = crud.get_books(db)
-    return books
+# --- New Auth Endpoints ---
+@app.post("/api/login", response_model=SimpleToken, tags=["Authentication"])
+def simple_login(login_data: schemas.UserCreate, db: Session = Depends(get_db)):  # Reusing UserCreate for simplicity (username/password)
+    user = crud.get_user_by_username(db, username=login_data.username)
+    if not user or not security.verify_password(
+        login_data.password, user.hashed_password
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+        )
+    return SimpleToken(access_token=f"{user.username}:{user.role}")
+
+
+@app.post("/api/users/", response_model=schemas.User, tags=["Users"])
+def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    if crud.get_user_by_email(db, user.email):
+        raise HTTPException(status_code=400, detail="Email already registered")
+    if crud.get_user_by_username(db, user.username):
+        raise HTTPException(status_code=400, detail="Username already registered")
+    return crud.create_user(db, user)
+
+
+@app.get("/api/users/me", response_model=schemas.User, tags=["Users"])
+def read_users_me(current_user: models.User = Depends(get_current_user_simple)):
+    return current_user
+
+
+# --- Book Endpoints ---
+@app.post("/api/books/", response_model=schemas.Book, tags=["Books"])
+def create_book(
+    book: schemas.BookCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_seller_simple),
+):
+    return crud.create_book(db, book, current_user.id)
+
+
+@app.get("/api/books/", response_model=List[schemas.Book], tags=["Books"])
+def read_books(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    return crud.get_books(db, skip=skip, limit=limit)
 
 
 @app.get("/api/books/{book_id}", response_model=schemas.Book, tags=["Books"])
-async def get_book_by_id(book_id: int, db: Session = Depends(get_db)):
-    """Returns a single book by its ID from the database."""
+def read_book(book_id: int, db: Session = Depends(get_db)):
     db_book = crud.get_book(db, book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
     return db_book
+
+
+# --- Original Endpoints (Preserved) ---
 
 
 @app.get("/", tags=["Dashboard"], response_class=HTMLResponse)
@@ -339,7 +404,7 @@ async def dashboard_stats():
     )
 
 
-@app.post("/login", tags=["Authentication"])
+@app.post("/login", tags=["Authentication (Old)"])
 def login(password: str):
     if password != "correct-password":
         LOGIN_ERRORS.labels(error_code="401_INVALID_PASSWORD").inc()
@@ -391,4 +456,4 @@ def place_bid(book_id: int, amount: float):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

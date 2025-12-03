@@ -4,6 +4,8 @@ import logger from './loggingService'; // Import our structured logger
 
 const API_BASE_URL = 'http://localhost:8000'; // Our backend is running on port 8000
 
+let authToken = null; // Store the authentication token
+
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -18,6 +20,10 @@ api.interceptors.request.use(config => {
     url: config.url,
     data: config.data,
   });
+  // Add authentication token to headers if available
+  if (authToken) {
+    config.headers['X-Auth-Token'] = authToken;
+  }
   // Attach a timestamp to the request config to calculate latency later
   config.metadata = { startTime: new Date() };
   return config;
@@ -74,26 +80,36 @@ api.interceptors.response.use(response => {
  * Includes structured logging, latency measurement, and trace ID propagation.
  */
 const apiService = {
-  login: (password) => {
-    // Our backend expects the password in the request body
-    return api.post('/login', { password: password });
+  // Function to set the authentication token dynamically
+  setAuthToken: (token) => {
+    authToken = token;
   },
 
-  placeBid: (bookId, amount) => {
-    return api.post('/bid', { book_id: bookId, amount: amount });
+  // New login function for simple auth
+  login: async (username, password) => {
+    const response = await api.post('/api/login', { username, password });
+    return response.data; // Should return { access_token: "username:role", token_type: "bearer" }
   },
 
-  getMetrics: () => {
-    // The metrics endpoint returns plain text, so we override the default JSON parsing
-    return api.get('/metrics', {
-      transformResponse: [(data) => data], // Keep the response as plain text
-      headers: {
-        'Accept': 'text/plain',
-      },
-    });
+  // New register function
+  register: async (username, email, password, role) => {
+    const response = await api.post('/users/', { username, email, password, role });
+    return response.data;
   },
 
-  // Add other API calls here as needed
+  // New function to fetch current user (can be used to verify token)
+  fetchCurrentUser: async () => {
+    const response = await api.get('/users/me');
+    return response.data; // Should return user object
+  },
+
+  // New function for sellers to create a book
+  createBook: async (bookData) => {
+    const response = await api.post('/api/books/', bookData);
+    return response.data;
+  },
+
+  // Existing book fetching functions
   getBooks: async () => {
     const response = await api.get('/api/books');
     return response.data;
@@ -101,6 +117,23 @@ const apiService = {
   getBookById: async (id) => {
     const response = await api.get(`/api/books/${id}`);
     return response.data;
+  },
+
+  // Original functions (kept for compatibility if needed)
+  oldLogin: (password) => { // Renamed to avoid conflict with new login
+    // This calls the old /login endpoint
+    return api.post('/login', { password: password });
+  },
+  placeBid: (bookId, amount) => {
+    return api.post('/bid', { book_id: bookId, amount: amount });
+  },
+  getMetrics: () => {
+    return api.get('/metrics', {
+      transformResponse: [(data) => data],
+      headers: {
+        'Accept': 'text/plain',
+      },
+    });
   },
 };
 
