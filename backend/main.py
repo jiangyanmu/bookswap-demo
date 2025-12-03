@@ -32,14 +32,16 @@ DASHBOARD_STATE = {
     "total_requests": 0,
     "total_errors": 0,
     "latest_latency_ms": 0,
-    "logs": deque(maxlen=20)  # 只保留最新 20 筆日誌
+    "logs": deque(maxlen=20),  # 只保留最新 20 筆日誌
 }
+
 
 # -------------------------------
 # Custom Log Handler for Dashboard (新增：攔截日誌給前端)
 # -------------------------------
 class DashboardLogHandler(logging.Handler):
     """將日誌同時寫入記憶體，讓 Dashboard 可以即時讀取"""
+
     def emit(self, record):
         try:
             log_entry = self.format(record)
@@ -49,11 +51,12 @@ class DashboardLogHandler(logging.Handler):
             simple_log = {
                 "type": log_obj.get("level", "INFO"),
                 "time": log_obj.get("timestamp", "").split("T")[-1].split(".")[0],
-                "msg": log_obj.get("message", "")
+                "msg": log_obj.get("message", ""),
             }
             DASHBOARD_STATE["logs"].appendleft(simple_log)
         except Exception:
             self.handleError(record)
+
 
 # -------------------------------
 # Custom JSON Formatter
@@ -113,6 +116,7 @@ def update_cpu_usage():
         # 這裡的 interval=1 本身就會阻塞 1 秒，所以不需要額外的 sleep
         CPU_USAGE.set(psutil.cpu_percent(interval=1))
 
+
 cpu_thread = threading.Thread(target=update_cpu_usage, daemon=True)
 cpu_thread.start()
 
@@ -120,6 +124,9 @@ cpu_thread.start()
 # Feature Toggles
 # -------------------------------
 ONE_CLICK_BID_ENABLED = os.getenv("ONE_CLICK_BID_ENABLED", "true").lower() == "true"
+
+# Threshold for latency alerts (in milliseconds)
+LATENCY_THRESHOLD_MS = 500
 
 # -------------------------------
 # FastAPI App
@@ -147,18 +154,30 @@ async def request_context_middleware(request: Request, call_next):
     response = await call_next(request)
 
     process_time = datetime.datetime.utcnow().timestamp() - start_time
+    process_time_ms = round(process_time * 1000, 2)
 
     # Dashboard: 統計延遲與錯誤
-    DASHBOARD_STATE["latest_latency_ms"] = round(process_time * 1000, 2)
+    DASHBOARD_STATE["latest_latency_ms"] = process_time_ms
     if response.status_code >= 500:
         DASHBOARD_STATE["total_errors"] += 1
+        logger.warning(
+            f"Server error detected for {request.url.path} with status {response.status_code}",
+            extra={"props": {"event": "server_error", "path": request.url.path, "status_code": response.status_code, "trace_id": trace_id}}
+        )
+
+    # 監控延遲閾值並發出警報 (Log Warning)
+    if process_time_ms > LATENCY_THRESHOLD_MS:
+        logger.warning(
+            f"High latency detected for {request.url.path}: {process_time_ms}ms > {LATENCY_THRESHOLD_MS}ms",
+            extra={"props": {"event": "high_latency", "path": request.url.path, "latency_ms": process_time_ms, "threshold_ms": LATENCY_THRESHOLD_MS, "trace_id": trace_id}}
+        )
 
     log_extra = {
         "props": {
             "method": request.method,
             "path": request.url.path,
             "status_code": response.status_code,
-            "process_time_ms": round(process_time * 1000, 2),
+            "process_time_ms": process_time_ms,
         }
     }
     logger.info(
@@ -179,10 +198,12 @@ app.mount("/metrics", metrics_app)
 # API Endpoints
 # -------------------------------
 
+
 # 修改：根路徑回傳 Dashboard HTML
 @app.get("/", tags=["Dashboard"], response_class=HTMLResponse)
 async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
 
 # 新增：Dashboard 數據 API
 @app.get("/api/dashboard-stats", tags=["Dashboard"])
@@ -202,24 +223,41 @@ async def dashboard_stats():
     # 簡易 Alert 邏輯
     alerts = []
     if cpu > 85:
-        alerts.append({"level": "WARNING", "title": f"CPU High ({cpu}%)", "component": "Hosting Node"})
+        alerts.append(
+            {
+                "level": "WARNING",
+                "title": f"CPU High ({cpu}%)",
+                "component": "Hosting Node",
+            }
+        )
     if latency > 500:
-        alerts.append({"level": "CRITICAL", "title": "High Latency", "component": "API Gateway"})
+        alerts.append(
+            {"level": "CRITICAL", "title": "High Latency", "component": "API Gateway"}
+        )
     if errors > 0 and (errors / total) > 0.05:
-         alerts.append({"level": "CRITICAL", "title": "Error Rate > 5%", "component": "Auth/Bid Service"})
+        alerts.append(
+            {
+                "level": "CRITICAL",
+                "title": "Error Rate > 5%",
+                "component": "Auth/Bid Service",
+            }
+        )
 
-    return JSONResponse({
-        "metrics": {
-            "availability": round(availability, 2),
-            "errorBudgetUsed": min(errors * 10, 100), # 模擬預算消耗
-            "p95Latency": int(latency),
-            "p95Threshold": 200,
-            "cpuUsage": cpu,
-            "cpuThreshold": 90,
-        },
-        "logs": list(DASHBOARD_STATE["logs"]),
-        "alerts": alerts
-    })
+    return JSONResponse(
+        {
+            "metrics": {
+                "availability": round(availability, 2),
+                "errorBudgetUsed": min(errors * 10, 100),  # 模擬預算消耗
+                "p95Latency": int(latency),
+                "p95Threshold": 200,
+                "cpuUsage": cpu,
+                "cpuThreshold": 90,
+            },
+            "logs": list(DASHBOARD_STATE["logs"]),
+            "alerts": alerts,
+        }
+    )
+
 
 @app.post("/login", tags=["Authentication"])
 def login(password: str):
@@ -271,6 +309,8 @@ def place_bid(book_id: int, amount: float):
 
     return {"message": f"Bid for book {book_id} of ${amount} placed successfully."}
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
