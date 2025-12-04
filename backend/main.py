@@ -422,37 +422,77 @@ def login(password: str):
     return {"message": "Login successful"}
 
 
+class BidCreate(BaseModel):
+    book_id: int
+    amount: float
+
+
 @BID_LATENCY.time()
 @app.post("/bid", tags=["Bidding"])
-def place_bid(book_id: int, amount: float):
+def place_bid(bid: BidCreate, db: Session = Depends(get_db)):
+    book_id = bid.book_id
+    amount = bid.amount
     logger.info(
         f"Received bid for book_id {book_id} with amount {amount}",
         extra={"props": {"book_id": book_id, "amount": amount}},
     )
+    
+    # 1. Find the book
+    book = crud.get_book(db, book_id=book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    # 2. Simulate processing delay based on feature flag (Optional: keep or remove based on preference, keeping for consistency with latency metrics)
     if ONE_CLICK_BID_ENABLED:
         logger.info("Processing with 'One-Click Bid' flow (Feature ON)")
         threading.Event().wait(0.05)
     else:
         logger.info("Processing with 'Traditional Bid' flow (Feature OFF)")
         threading.Event().wait(0.3)
+
+    # 3. Validation Logic
+    # Rule 1: Bid cannot be higher than Buy Now price
+    if amount > book.price:
+        logger.warning(f"Bid ${amount} exceeds buy now price ${book.price}")
+        raise HTTPException(status_code=400, detail=f"Bid cannot be higher than the Buy Now price of ${book.price}")
+
+    # Rule 2: Check against Starting Bid or Increment
+    current_highest = book.current_bid if book.current_bid else 0.0
+    
+    if current_highest == 0.0:
+        # First bid logic
+        if amount < book.starting_bid:
+             logger.warning(f"Bid ${amount} is lower than starting bid ${book.starting_bid}")
+             raise HTTPException(status_code=400, detail=f"Bid must be at least the starting bid of ${book.starting_bid}")
+    else:
+        # Subsequent bid logic
+        min_next_bid = current_highest + book.bid_increment
+        # Allow if amount is exactly the Buy Now price (even if increment rule would push it over, usually Buy Now overrides)
+        # But based on user rule "not greater than price", and normal increment logic:
+        if amount < min_next_bid and amount != book.price:
+             logger.warning(f"Bid ${amount} is lower than min increment. Needed: ${min_next_bid}")
+             raise HTTPException(status_code=400, detail=f"Bid must be at least ${min_next_bid} (Current bid ${current_highest} + Increment ${book.bid_increment})")
+
     try:
         logger.info("Connecting to database to save bid...")
-        if book_id == 999:
-            threading.Event().wait(2)
-            raise ConnectionError("DB Timeout while saving bid")
-        threading.Event().wait(0.2)
-        logger.info("Successfully saved bid to database.")
-    except ConnectionError as e:
+        
+        book.current_bid = amount
+        db.commit()
+        db.refresh(book)
+        logger.info(f"Successfully updated bid to ${amount} for book {book_id}.")
+            
+    except Exception as e:
         logger.error(
             f"Failed to save bid for book_id {book_id}",
-            extra={"props": {"book_id": book_id, "error": str(e), "is_timeout": True}},
+            extra={"props": {"book_id": book_id, "error": str(e)}},
         )
         return Response(
             content=json.dumps({"error": "Database operation failed"}),
             status_code=503,
             media_type="application/json",
         )
-    return {"message": f"Bid for book {book_id} of ${amount} placed successfully."}
+    
+    return {"message": f"Bid for book {book_id} of ${amount} placed successfully.", "current_bid": book.current_bid}
 
 
 if __name__ == "__main__":

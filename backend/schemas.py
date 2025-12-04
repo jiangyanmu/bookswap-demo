@@ -25,6 +25,9 @@ class BookBase(BaseModel):
     title: str
     author: str
     price: Optional[float] = None
+    current_bid: Optional[float] = 0.0
+    starting_bid: Optional[float] = 0.0
+    bid_increment: Optional[float] = 1.0
     description: Optional[str] = None
     cover_image: Optional[str] = None
 

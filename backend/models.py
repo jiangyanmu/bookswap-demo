@@ -20,6 +20,9 @@ class Book(Base):
     title = Column(String, index=True)
     author = Column(String)
     price = Column(Float)
+    current_bid = Column(Float, default=0.0)
+    starting_bid = Column(Float, default=0.0)
+    bid_increment = Column(Float, default=1.0)
     description = Column(String)
     cover_image = Column(String)
 

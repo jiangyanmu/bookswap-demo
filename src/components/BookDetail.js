@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import apiService from '../services/apiService';
 import { useAuth } from '../context/AuthContext';
+import { FEATURES } from '../config/featureFlags';
 import Button from './ui/Button';
 import Card from './ui/Card';
 import Input from './ui/Input';
@@ -38,11 +39,36 @@ const BookDetail = () => {
         }
 
         try {
-            await apiService.placeBid(book.id, parseFloat(bidAmount));
+            const response = await apiService.placeBid(book.id, parseFloat(bidAmount));
             setBidMessage('Bid placed successfully!');
             setBidAmount('');
+            // Update the current bid in the UI
+            if (response.data && response.data.current_bid) {
+                setBook(prev => ({ ...prev, current_bid: response.data.current_bid }));
+            }
         } catch (err) {
-            setBidMessage('Failed to place bid. Please try again.');
+            const errorMessage = err.response?.data?.detail || 'Failed to place bid. Please try again.';
+            setBidMessage(errorMessage);
+        }
+    };
+
+    const handleOneClickBid = async () => {
+        if (!isAuthenticated) {
+            navigate('/login');
+            return;
+        }
+
+        try {
+            // One-Click Bid uses the full price (Buy Now Price)
+            const response = await apiService.placeBid(book.id, book.price);
+            setBidMessage(`Success! You've placed a winning bid of $${book.price}!`);
+            // Update the current bid in the UI
+            if (response.data && response.data.current_bid) {
+                setBook(prev => ({ ...prev, current_bid: response.data.current_bid }));
+            }
+        } catch (err) {
+            const errorMessage = err.response?.data?.detail || 'Failed to place One-Click Bid. Please try again.';
+            setBidMessage(errorMessage);
         }
     };
 
@@ -98,6 +124,14 @@ const BookDetail = () => {
                                 </span>
                             </div>
 
+                            {/* Current Bid Display */}
+                            <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-100">
+                                <p className="text-sm text-gray-500 uppercase tracking-wider font-bold mb-1">Current Highest Bid</p>
+                                <p className="text-3xl font-bold text-brand">
+                                    {book.current_bid && book.current_bid > 0 ? `$${book.current_bid}` : 'No bids yet'}
+                                </p>
+                            </div>
+
                             <div className="space-y-4 mb-8">
                                 <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider">Description</h3>
                                 <p className="text-gray-500 leading-relaxed text-lg">
@@ -110,11 +144,35 @@ const BookDetail = () => {
                             <h3 className="text-lg font-semibold text-gray-900 mb-4">Place a Bid</h3>
                             
                             {bidMessage && (
-                                <div className={`p-4 mb-6 rounded-lg text-sm font-medium flex items-center ${bidMessage.includes('success') ? 'bg-green-50 text-success border border-green-100' : 'bg-red-50 text-danger border border-red-100'}`}>
+                                <div className={`p-4 mb-6 rounded-lg text-sm font-medium flex items-center ${bidMessage.includes('Success') || bidMessage.includes('success') ? 'bg-green-50 text-success border border-green-100' : 'bg-red-50 text-danger border border-red-100'}`}>
                                     {bidMessage}
                                 </div>
                             )}
                             
+                            {/* One-Click Bid Section */}
+                            {FEATURES.ENABLE_SMART_BIDDING && (
+                                <div className="mb-6 p-4 bg-brand-tint/10 rounded-lg border border-brand-tint/20">
+                                    <div className="flex justify-between items-center">
+                                        <div>
+                                            <p className="font-bold text-brand-dark">Buy It Now</p>
+                                            <p className="text-sm text-gray-600">Instantly win this item at the listed price.</p>
+                                        </div>
+                                        <Button 
+                                            onClick={handleOneClickBid}
+                                            disabled={!isAuthenticated}
+                                            className="bg-brand-dark hover:bg-brand text-white font-bold py-2 px-6 shadow-md hover:shadow-lg transform hover:-translate-y-0.5 transition-all"
+                                        >
+                                            One-Click Bid ${book.price}
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
+
+                            <p className="text-sm text-gray-500 mb-2">Or place a custom bid (Auction):</p>
+                            <div className="flex gap-4 mb-4 text-xs text-gray-500">
+                                <span className="bg-gray-100 px-2 py-1 rounded">Starting Bid: ${book.starting_bid || 0}</span>
+                                <span className="bg-gray-100 px-2 py-1 rounded">Min Increment: ${book.bid_increment || 1}</span>
+                            </div>
                             <form onSubmit={handleBid} className="flex flex-col sm:flex-row gap-4 items-end">
                                 <div className="w-full sm:flex-1">
                                     <Input
@@ -123,7 +181,7 @@ const BookDetail = () => {
                                         value={bidAmount}
                                         onChange={(e) => setBidAmount(e.target.value)}
                                         required
-                                        min={book.price}
+                                        min="0"
                                         step="0.01"
                                         className="w-full"
                                     />
@@ -131,9 +189,10 @@ const BookDetail = () => {
                                 <Button 
                                     type="submit" 
                                     disabled={!isAuthenticated}
+                                    variant="outline"
                                     className="w-full sm:w-auto h-[42px]"
                                 >
-                                    {isAuthenticated ? 'Submit Bid' : 'Login to Bid'}
+                                    {isAuthenticated ? 'Place Bid' : 'Login to Bid'}
                                 </Button>
                             </form>
                             
