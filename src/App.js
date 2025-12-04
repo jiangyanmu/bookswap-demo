@@ -1,52 +1,61 @@
-import React from "react";
-import {
-  BrowserRouter as Router,
-  Routes,
-  Route,
-} from "react-router-dom";
-import { AuthProvider } from "./context/AuthContext";
-import NavBar from "./components/NavBar";
-import BookList from "./components/BookList";
-import BookDetail from "./components/BookDetail";
-import Login from "./components/Login";
-import Register from "./components/Register";
-import CreateBook from "./components/CreateBook";
-import ErrorBoundary from "./components/ErrorBoundary";
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import LandingPage from './components/LandingPage';
+import Login from './components/Login';
+import Register from './components/Register';
+import BookDetail from './components/BookDetail';
+import CreateBook from './components/CreateBook';
+import MetricsDashboard from './components/MetricsDashboard';
+import ErrorBoundary from './components/ErrorBoundary';
+import './App.css';
+
+// Protected Route Wrapper
+const ProtectedRoute = ({ children }) => {
+    const { isAuthenticated } = useAuth();
+    if (!isAuthenticated) {
+        return <Navigate to="/login" replace />;
+    }
+    return children;
+};
 
 function App() {
   return (
     <Router>
-      <AuthProvider>
-        <div className="min-h-screen bg-gray-soft flex flex-col font-sans text-gray-900 selection:bg-brand-light/30">
-          <NavBar />
+      <ErrorBoundary>
+        <AuthProvider>
+          <div className="App font-sans text-gray-900">
+            <Routes>
+              {/* Public Routes */}
+              <Route path="/" element={<LandingPage />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/register" element={<Register />} />
+              <Route path="/books/:id" element={<BookDetail />} />
+              
+              {/* Protected Routes */}
+              <Route 
+                path="/create-book" 
+                element={
+                  <ProtectedRoute>
+                    <CreateBook />
+                  </ProtectedRoute>
+                } 
+              />
+              <Route 
+                path="/dashboard" 
+                element={
+                  <ProtectedRoute>
+                    <MetricsDashboard />
+                  </ProtectedRoute>
+                } 
+              />
 
-          <main className="flex-grow container mx-auto px-4 sm:px-6 lg:px-8 py-12">
-            <ErrorBoundary>
-              <Routes>
-                <Route path="/" element={<BookList />} />
-                <Route path="/login" element={<Login />} />
-                <Route path="/register" element={<Register />} />
-                <Route path="/books/:id" element={<BookDetail />} />
-                <Route path="/create-book" element={<CreateBook />} />
-              </Routes>
-            </ErrorBoundary>
-          </main>
-
-          <footer className="bg-white border-t border-gray-200 mt-auto">
-            <div className="container mx-auto px-4 py-8">
-              <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-                <div className="text-center md:text-left">
-                  <h3 className="text-sm font-semibold text-gray-900">BookSwap</h3>
-                  <p className="text-sm text-gray-500 mt-1">DevSecOps Demo Project</p>
-                </div>
-                <div className="text-sm text-gray-500">
-                  &copy; {new Date().getFullYear()} BookSwap. All Rights Reserved.
-                </div>
-              </div>
-            </div>
-          </footer>
-        </div>
-      </AuthProvider>
+              {/* Fallback */}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </div>
+        </AuthProvider>
+      </ErrorBoundary>
     </Router>
   );
 }
