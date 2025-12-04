@@ -209,18 +209,24 @@ async def startup_event():
         # Create default books
         seed_books = [
             {
-                "title": "Designing Data-Intensive Applications",
-                "author": "Martin Kleppmann",
-                "price": 47.99,
-                "description": "The big ideas behind reliable, scalable, and maintainable systems.",
-                "cover_image": "https://images-na.ssl-images-amazon.com/images/I/91J9p5S2s0L.jpg",
+                "title": "富爸爸，窮爸爸【25週年紀念版】",
+                "author": "羅勃特．T．清崎",
+                "price": 331,
+                "description": "This is a book about financial education.",
+                "cover_image": "https://im1.book.com.tw/image/getImage?i=https://www.books.com.tw/img/001/093/54/0010935466.jpg&v=631872bdk&w=348&h=348",
+                "current_bid": 150.0,
+                "starting_bid": 100.0,
+                "bid_increment": 10.0,
             },
             {
-                "title": "Clean Code",
-                "author": "Robert C. Martin",
-                "price": 35.50,
-                "description": "Even bad code can function.",
-                "cover_image": "https://images-na.ssl-images-amazon.com/images/I/41xShlnlJiL._SX379_BO1,204,203,200_.jpg",
+                "title": "張忠謀自傳全集",
+                "author": "張忠謀",
+                "price": 825,
+                "description": "The autobiography of Morris Chang, founder of TSMC.",
+                "cover_image": "https://im2.book.com.tw/image/getImage?i=https://www.books.com.tw/img/001/100/55/0011005571.jpg&v=672b7d6ck&w=348&h=348",
+                "current_bid": 400.0,
+                "starting_bid": 300.0,
+                "bid_increment": 50.0,
             },
         ]
         for book_data in seed_books:
@@ -303,9 +309,7 @@ app.mount("/metrics", metrics_app)
 
 # --- New Auth Endpoints ---
 @app.post("/api/login", response_model=SimpleToken, tags=["Authentication"])
-def simple_login(
-    login_data: schemas.UserLogin, db: Session = Depends(get_db)
-):
+def simple_login(login_data: schemas.UserLogin, db: Session = Depends(get_db)):
     user = crud.get_user_by_username(db, username=login_data.username)
     if not user or not security.verify_password(
         login_data.password, user.hashed_password
@@ -436,7 +440,7 @@ def place_bid(bid: BidCreate, db: Session = Depends(get_db)):
         f"Received bid for book_id {book_id} with amount {amount}",
         extra={"props": {"book_id": book_id, "amount": amount}},
     )
-    
+
     # 1. Find the book
     book = crud.get_book(db, book_id=book_id)
     if not book:
@@ -454,33 +458,46 @@ def place_bid(bid: BidCreate, db: Session = Depends(get_db)):
     # Rule 1: Bid cannot be higher than Buy Now price
     if amount > book.price:
         logger.warning(f"Bid ${amount} exceeds buy now price ${book.price}")
-        raise HTTPException(status_code=400, detail=f"Bid cannot be higher than the Buy Now price of ${book.price}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bid cannot be higher than the Buy Now price of ${book.price}",
+        )
 
     # Rule 2: Check against Starting Bid or Increment
     current_highest = book.current_bid if book.current_bid else 0.0
-    
+
     if current_highest == 0.0:
         # First bid logic
         if amount < book.starting_bid:
-             logger.warning(f"Bid ${amount} is lower than starting bid ${book.starting_bid}")
-             raise HTTPException(status_code=400, detail=f"Bid must be at least the starting bid of ${book.starting_bid}")
+            logger.warning(
+                f"Bid ${amount} is lower than starting bid ${book.starting_bid}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Bid must be at least the starting bid of ${book.starting_bid}",
+            )
     else:
         # Subsequent bid logic
         min_next_bid = current_highest + book.bid_increment
         # Allow if amount is exactly the Buy Now price (even if increment rule would push it over, usually Buy Now overrides)
         # But based on user rule "not greater than price", and normal increment logic:
         if amount < min_next_bid and amount != book.price:
-             logger.warning(f"Bid ${amount} is lower than min increment. Needed: ${min_next_bid}")
-             raise HTTPException(status_code=400, detail=f"Bid must be at least ${min_next_bid} (Current bid ${current_highest} + Increment ${book.bid_increment})")
+            logger.warning(
+                f"Bid ${amount} is lower than min increment. Needed: ${min_next_bid}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Bid must be at least ${min_next_bid} (Current bid ${current_highest} + Increment ${book.bid_increment})",
+            )
 
     try:
         logger.info("Connecting to database to save bid...")
-        
+
         book.current_bid = amount
         db.commit()
         db.refresh(book)
         logger.info(f"Successfully updated bid to ${amount} for book {book_id}.")
-            
+
     except Exception as e:
         logger.error(
             f"Failed to save bid for book_id {book_id}",
@@ -491,8 +508,11 @@ def place_bid(bid: BidCreate, db: Session = Depends(get_db)):
             status_code=503,
             media_type="application/json",
         )
-    
-    return {"message": f"Bid for book {book_id} of ${amount} placed successfully.", "current_bid": book.current_bid}
+
+    return {
+        "message": f"Bid for book {book_id} of ${amount} placed successfully.",
+        "current_bid": book.current_bid,
+    }
 
 
 if __name__ == "__main__":
