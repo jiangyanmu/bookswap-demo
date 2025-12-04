@@ -4,3 +4,7 @@ node_modules/
 # Environment variables (重要！這行保護你的 Secret)
 .env
 .env.local
+
+# database files
+*.sqlite3
+backend/bookswap.db
