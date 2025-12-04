@@ -135,7 +135,7 @@ app = FastAPI(title="BookSwap Backend")
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3001"],
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -303,7 +303,9 @@ app.mount("/metrics", metrics_app)
 
 # --- New Auth Endpoints ---
 @app.post("/api/login", response_model=SimpleToken, tags=["Authentication"])
-def simple_login(login_data: schemas.UserCreate, db: Session = Depends(get_db)):  # Reusing UserCreate for simplicity (username/password)
+def simple_login(
+    login_data: schemas.UserLogin, db: Session = Depends(get_db)
+):
     user = crud.get_user_by_username(db, username=login_data.username)
     if not user or not security.verify_password(
         login_data.password, user.hashed_password

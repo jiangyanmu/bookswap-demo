@@ -16,7 +16,7 @@ class UserLogin(BaseModel):
 
 class User(UserBase):
     id: int
-    
+
     class Config:
         from_attributes = True
 
@@ -34,9 +34,9 @@ class BookCreate(BookBase):
 class Book(BookBase):
     id: int
     owner_id: int
-    # We can optionally include the full owner object here if needed, 
+    # We can optionally include the full owner object here if needed,
     # but for now keeping it simple to avoid circular dependency issues if any.
-    # owner: User 
+    # owner: User
 
     class Config:
         from_attributes = True
