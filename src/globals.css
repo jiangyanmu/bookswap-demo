@@ -1,0 +1,22 @@
+/* 1. 引入 Inter 字體 */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* 2. Tailwind 指令 */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 3. Base Styles & Debug */
+@layer base {
+  body {
+    @apply font-sans text-gray-900 bg-gray-soft antialiased;
+    /* DEBUG: 這行會給整個頁面加一個紅色邊框，證明 CSS 已載入且 Tailwind @apply 可用 */
+    /* 上線前請刪除 */
+    /* border: 4px solid red; */ 
+  }
+}
+
+/* 4. 自定義樣式修正 (可選) */
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+}
